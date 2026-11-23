@@ -389,11 +389,12 @@ const layer = Layer.effect(
               const initialName = input.definitions?.get(input.call.name)?.name ?? input.call.name
               const initial = initialName === "execute" && codemode ? codemode.tool : direct.get(initialName)
               // Hooks and the job see the options of an options line as fields, as they would from JSON.
-              const callInput =
+              const split =
                 initial === codemode?.tool && codemode?.optionsLine
                   ? CodeModeTool.splitOptions(input.call.input)
-                  : input.call.input
-              const event = yield* beforeExecute(input.call.name, initial, callInput, context)
+                  : { input: input.call.input }
+              if ("error" in split) return yield* new Tool.Error({ message: split.error })
+              const event = yield* beforeExecute(input.call.name, initial, split.input, context)
               const requested = input.definitions?.get(event.tool)
               // Preserve session context removal and alias resolution, now after the repair hook.
               if (!requested && input.definitions && (direct.has(event.tool) || codemode?.tool.name === event.tool))

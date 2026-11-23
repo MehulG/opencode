@@ -158,17 +158,23 @@ const Options = Schema.Struct({ timeout: FullInput.fields.timeout, background: F
 const decodeOptions = Schema.decodeUnknownOption(Schema.fromJsonString(Options))
 
 /**
- * Moves a leading options line out of `code` into `timeout` and `background`. Anything else, including a line whose
- * JSON doesn't decode, stays in the code, where it is a comment.
+ * Moves a leading options line out of `code` into `timeout` and `background`, and drops keys `execute` doesn't take, as
+ * JSON input does. A line that isn't valid options, or has no program after it, fails the call so the model learns its
+ * options were not applied.
  */
-export const splitOptions = (input: unknown) => {
-  if (typeof input !== "object" || input === null) return input
+export const splitOptions = (input: unknown): { readonly input: unknown } | { readonly error: string } => {
+  if (typeof input !== "object" || input === null) return { input }
   const code = (input as { code?: unknown }).code
-  if (typeof code !== "string") return input
+  if (typeof code !== "string" || !/^[ \t]*\/\/ @exec:/.test(code)) return { input }
   const line = /^[ \t]*\/\/ @exec:([^\r\n]*)\r?\n/.exec(code)
-  const options = line ? Option.getOrUndefined(decodeOptions(line[1])) : undefined
-  if (!line || !options) return input
-  return { ...input, ...options, code: code.slice(line[0].length) }
+  if (!line || line[0].length === code.length)
+    return { error: `Put the program on the lines after \`${OPTIONS_PREFIX}\`.` }
+  const options = Option.getOrUndefined(decodeOptions(line[1]))
+  if (!options)
+    return {
+      error: `\`${OPTIONS_PREFIX}\` must be followed by a JSON object with \`timeout\` (a positive integer of milliseconds) and \`background\` (a boolean), for example \`${OPTIONS_PREFIX} {"background": true}\`.`,
+    }
+  return { input: { ...input, ...options, code: code.slice(line[0].length) } }
 }
 
 export const create = (

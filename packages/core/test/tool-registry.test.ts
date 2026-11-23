@@ -131,6 +131,8 @@ describe("execute options line", () => {
       expect(Object.keys(result.execute.inputSchema.properties ?? {})).toEqual(["code"])
       expect(result.handoffs).toEqual([{ timeout: 5000 }])
       expect(result.output).toBe(1)
+      const invalid = yield* run(true, '// @exec: {"timeout": "5s"}\nreturn 1').pipe(Effect.flip)
+      expect(invalid.message).toContain("must be followed by a JSON object")
     }),
   )
 
