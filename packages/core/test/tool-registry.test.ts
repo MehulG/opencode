@@ -107,6 +107,53 @@ describe("Code Mode path and Bun", () => {
   )
 })
 
+describe("execute options line", () => {
+  const run = (optionsLine: boolean, code: string) =>
+    Effect.gen(function* () {
+      const tools = yield* Tool.Service
+      const snapshot = yield* tools.snapshot(undefined, { services: codeModeServices("/session/dir"), optionsLine })
+      const execute = snapshot.definitions.find((definition) => definition.name === "execute")!
+      const handoffs: Array<CodeModeJob.Options | undefined> = []
+      const result = yield* snapshot
+        .execute({ ...call("execute"), call: { type: "tool-call", id: "call-options", name: "execute", input: { code } } })
+        .pipe(
+          Effect.provideService(CodeModeJob.Current, (context, run, options) =>
+            Effect.sync(() => handoffs.push(options)).pipe(Effect.andThen(run(context))),
+          ),
+        )
+      return { execute, handoffs, output: JSON.parse(result.output.output) }
+    })
+
+  codeModeIt.effect("for a Lark model, execute takes raw code and its options line reaches the job", () =>
+    Effect.gen(function* () {
+      const result = yield* run(true, '// @exec: {"timeout": 5000}\nreturn 1')
+      expect(result.execute.freeform).toMatchObject({ type: "lark" })
+      expect(Object.keys(result.execute.inputSchema.properties ?? {})).toEqual(["code"])
+      expect(result.handoffs).toEqual([{ timeout: 5000 }])
+      expect(result.output).toBe(1)
+    }),
+  )
+
+  codeModeIt.effect("other models keep timeout and background as JSON fields", () =>
+    Effect.gen(function* () {
+      const result = yield* run(false, '// @exec: {"timeout": 5000}\nreturn 1')
+      expect(result.execute.freeform).toEqual({ type: "text" })
+      expect(Object.keys(result.execute.inputSchema.properties ?? {})).toEqual(["code", "timeout", "background"])
+      // The line is only a comment here.
+      expect(result.handoffs).toEqual([{}])
+      expect(result.output).toBe(1)
+    }),
+  )
+
+  it.effect("without full_codemode, the options line is ignored", () =>
+    Effect.gen(function* () {
+      const result = yield* run(true, '// @exec: {"timeout": 5000}\nreturn 1')
+      expect(result.execute.freeform).toEqual({ type: "text" })
+      expect(result.handoffs).toEqual([undefined])
+    }),
+  )
+})
+
 describe("Tool", () => {
   it.effect("reads the current editor tools by effective name", () =>
     Effect.gen(function* () {

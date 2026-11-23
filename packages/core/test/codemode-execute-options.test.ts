@@ -26,12 +26,13 @@ const it = testEffect(
   ),
 )
 
-const tool = (full: boolean) =>
+const tool = (full: boolean, optionsLine = false) =>
   CodeModeTool.create(
     { tools: new Map(), namespaces: new Map() },
     () => Effect.die("unused"),
     {} as Permission.Interface,
     full ? (Context.empty() as never) : undefined,
+    optionsLine,
   )
 
 const context = (sessionID: string): Tool.Context => ({
@@ -96,6 +97,36 @@ describe("execute timeout and background", () => {
       expect(() => Schema.decodeUnknownSync(CodeModeTool.FullInput)({ code: "1", timeout: 0 })).toThrow()
       expect(() => Schema.decodeUnknownSync(CodeModeTool.FullInput)({ code: "1", timeout: 1.5 })).toThrow()
       expect(tool(true).description).toContain("do not poll")
+    }),
+  )
+
+  it.effect("takes raw code with an optional options line when the model takes Lark grammars", () =>
+    Effect.sync(() => {
+      const lark = tool(true, true)
+      expect(lark.input).toBe(CodeMode.Input)
+      expect(lark.freeform).toMatchObject({ type: "lark", grammar: expect.stringContaining(String.raw`\/\/ @exec:`) })
+      expect(lark.description).toContain('start the code with one line `// @exec: <JSON object>`')
+      // Without full_codemode there are no options, so the line isn't offered.
+      expect(tool(false, true).freeform).toEqual({ type: "text" })
+      expect(tool(false, true).description).toBe(tool(false).description)
+    }),
+  )
+
+  it.effect("moves a leading options line into timeout and background", () =>
+    Effect.sync(() => {
+      const split = (code: string) => CodeModeTool.splitOptions({ code })
+      expect(split('// @exec: {"timeout": 5000, "background": true}\nreturn 1')).toEqual({
+        code: "return 1",
+        timeout: 5000,
+        background: true,
+      })
+      expect(split('  // @exec: {"background":true}\r\nreturn 1')).toEqual({ code: "return 1", background: true })
+      // Keys execute doesn't take are dropped, so options learned elsewhere don't fail the call.
+      expect(split('// @exec: {"yield_time_ms": 10000, "timeout": 5}\nx()')).toEqual({ code: "x()", timeout: 5 })
+      // A line that isn't valid options, or has no program after it, stays in the code as a comment.
+      for (const code of ["// @exec: {timeout}\nx()", '// @exec: {"timeout": -1}\nx()', '// @exec: {"timeout": 5}', "x()"])
+        expect(split(code)).toEqual({ code })
+      expect(CodeModeTool.splitOptions("x()")).toBe("x()")
     }),
   )
 

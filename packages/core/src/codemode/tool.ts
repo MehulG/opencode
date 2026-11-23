@@ -13,7 +13,7 @@ import type {
 } from "@opencode/schema/tool"
 import { Identifier } from "@opencode/schema/identifier"
 import { CallID } from "@opencode/schema/tool"
-import { Clock, Context, Effect, Ref, Schema, Scope, Semaphore } from "effect"
+import { Clock, Context, Effect, Option, Ref, Schema, Scope, Semaphore } from "effect"
 import { toSessionError } from "../session/to-session-error.js"
 import { definition, normalizedName } from "../tool/runtime.js"
 import { FileAccess } from "../file-access.js"
@@ -138,18 +138,57 @@ export const FullInput = Schema.Struct({
   }),
 })
 
+/** The optional first line of an `execute` program that sets its `timeout` and `background` options. */
+export const OPTIONS_PREFIX = "// @exec:"
+
+// An optional options line, then the program. The line is a JavaScript comment, so the program runs the same with it.
+const OPTIONS_GRAMMAR = String.raw`
+start: options_source | plain_source
+options_source: OPTIONS_LINE NEWLINE SOURCE
+plain_source: SOURCE
+
+OPTIONS_LINE: /[ \t]*\/\/ @exec:[^\r\n]*/
+NEWLINE: /\r?\n/
+SOURCE: /[\s\S]+/
+`
+
+const OPTIONS_DESCRIPTION = `To set options, start the code with one line \`${OPTIONS_PREFIX} <JSON object>\` and put the program on the next line, for example \`${OPTIONS_PREFIX} {"background": true}\`. Options: \`timeout\`, the milliseconds to wait before the script moves to the background (default ${2 * 60 * 1_000}); \`background\`, true to return its job ID immediately.`
+
+const Options = Schema.Struct({ timeout: FullInput.fields.timeout, background: FullInput.fields.background })
+const decodeOptions = Schema.decodeUnknownOption(Schema.fromJsonString(Options))
+
+/**
+ * Moves a leading options line out of `code` into `timeout` and `background`. Anything else, including a line whose
+ * JSON doesn't decode, stays in the code, where it is a comment.
+ */
+export const splitOptions = (input: unknown) => {
+  if (typeof input !== "object" || input === null) return input
+  const code = (input as { code?: unknown }).code
+  if (typeof code !== "string") return input
+  const line = /^[ \t]*\/\/ @exec:([^\r\n]*)\r?\n/.exec(code)
+  const options = line ? Option.getOrUndefined(decodeOptions(line[1])) : undefined
+  if (!line || !options) return input
+  return { ...input, ...options, code: code.slice(line[0].length) }
+}
+
 export const create = (
   inventory: Inventory,
   executeTool: (name: string, tool: Info, input: unknown, context: ToolContext) => Effect.Effect<Result, Error>,
   permission: Permission.Interface,
   /** With `full_codemode`, the session's services, which turn on the experimental `path` and `Bun` globals. */
   services?: Context.Context<Services>,
+  /**
+   * The model takes Lark grammars, so with `full_codemode` the options go on a first line of the raw code instead of in
+   * JSON fields, and the code itself never needs escaping.
+   */
+  optionsLine = false,
 ) => {
+  const lark = services !== undefined && optionsLine
   return {
     name: "execute",
-    description: description(services !== undefined),
-    input: services ? FullInput : CodeMode.Input,
-    freeform: { type: "text" },
+    description: lark ? `${description(true)}\n${OPTIONS_DESCRIPTION}` : description(services !== undefined),
+    input: services && !lark ? FullInput : CodeMode.Input,
+    freeform: lark ? { type: "lark", grammar: OPTIONS_GRAMMAR } : { type: "text" },
     output: ExecuteOutput,
     execute: ({ code }, context) =>
       Effect.gen(function* () {

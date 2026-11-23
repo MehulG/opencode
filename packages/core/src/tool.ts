@@ -72,6 +72,8 @@ export interface SnapshotOptions {
    */
   readonly services?: Context.Context<CodeModeTool.Services>
   readonly tools?: Policy
+  /** The session's model takes Lark grammars, so with `full_codemode` `execute` takes its options on a first line. */
+  readonly optionsLine?: boolean
 }
 
 export interface Interface extends State.Transformable<Editor> {
@@ -332,7 +334,8 @@ const layer = Layer.effect(
           const codemode = !codeModeEnabled
             ? undefined
             : (() => {
-                const key = `${full ? "1" : "0"}\0${codemodeEntries.map(([name]) => name).join("\0")}`
+                const optionsLine = full && options?.optionsLine === true
+                const key = `${full ? "1" : "0"}${optionsLine ? "1" : "0"}\0${codemodeEntries.map(([name]) => name).join("\0")}`
                 // Discovery is immutable for a registry revision and visible tool set. Keep executors
                 // fresh, but share the inventory, whose prepared runtime and much larger rendered catalog
                 // are cached by identity, and the execute tool's definition across steps.
@@ -350,6 +353,7 @@ const layer = Layer.effect(
                   (name, item, input, context) => run(inventory.tools, item, name, input, context),
                   permission,
                   full ? options.services : undefined,
+                  optionsLine,
                 )
                 const entry = cached ?? {
                   inventory,
@@ -363,7 +367,7 @@ const layer = Layer.effect(
                   }
                   catalogs.set(key, entry)
                 }
-                return { tool, inventory, catalog: entry.value, definition: entry.definition }
+                return { tool, inventory, catalog: entry.value, definition: entry.definition, optionsLine }
               })()
           return {
             ...(codemode === undefined ? {} : { codeModeCatalog: codemode.catalog }),
@@ -384,7 +388,12 @@ const layer = Layer.effect(
               }
               const initialName = input.definitions?.get(input.call.name)?.name ?? input.call.name
               const initial = initialName === "execute" && codemode ? codemode.tool : direct.get(initialName)
-              const event = yield* beforeExecute(input.call.name, initial, input.call.input, context)
+              // Hooks and the job see the options of an options line as fields, as they would from JSON.
+              const callInput =
+                initial === codemode?.tool && codemode?.optionsLine
+                  ? CodeModeTool.splitOptions(input.call.input)
+                  : input.call.input
+              const event = yield* beforeExecute(input.call.name, initial, callInput, context)
               const requested = input.definitions?.get(event.tool)
               // Preserve session context removal and alias resolution, now after the repair hook.
               if (!requested && input.definitions && (direct.has(event.tool) || codemode?.tool.name === event.tool))

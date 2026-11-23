@@ -174,6 +174,7 @@ const layer = Layer.effect(
           websearch: hasWebSearch,
           fullCodeMode: fullCodeMode && Tool.codeModeAvailable(permissions),
         }),
+        optionsLine: selected?.info.capabilities.freeform?.includes("lark") === true,
       })
       const loaded = yield* Effect.all(
         {
